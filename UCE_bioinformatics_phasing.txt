@@ -5,7 +5,10 @@
 ## 25 September 2017, last modified 2 February 2023
 ##############################################################################
 
-## general workflow ##
+########################
+## general workflow
+########################
+
 0) obtain trimmed consensus UCE alignments (results of phyluce seqcap_align) which have been edge-trimmed (but not internally trimmed) using custom parameters (including 65% proportion at ends)
 1) explode monolithic fasta to species-specific monolithic fastas
 2) map raw Illumina reads back to consensus UCE contigs
@@ -13,20 +16,12 @@
 4) explode phased UCE contigs
 5) align phased UCEs
 6) various file cleaning
-7)
-8) filter and trim phased UCE alignments
+7) various taxon name sanitation
+8) filter and trim phased UCEs
 
-5) and then filter by taxon completeness (here, to at least 1 sample per spp)
-
-
-
-7) custom QC, trimming, and filtering algo
-8) snp-sites
-9) filter snp-sites for SVDquartets (by sample + species presence)
-9-x) re-filtering based on reviewers - to maximize size of big-eared and small-eared data subsets
-
-13) create unlinked SNP datasets that are as similar as possible (highest locus overlap)
-
+########################
+## code
+########################
 
 0) obtain trimmed consensus UCE alignments (NOT RUN)
 
@@ -95,9 +90,7 @@ for (i in list.files()){
 # edge- and internal-trim
 # rename the alleles with '_x_' delimiter (eventually required for phyluce_snp_get_from_uce_alignments)
 
-
 # screen phased UCEs and do the above (in R programming language)
-
 R
 require(ape);require(ips);require(seqinr)
 taxa <- read.table('/path/to/taxon-list/sp_list.txt')
