@@ -1,0 +1,176 @@
+##############################################################################
+## Phasing Ultraconserved Element Loci (UCEs)
+## modified workflow from Andermann et al. 2018 Syst Biol
+## Bryan S. McLean
+## 25 September 2017, last modified 2 February 2023
+##############################################################################
+
+## general workflow ##
+0) obtain trimmed consensus UCE alignments (results of phyluce seqcap_align) which have been edge-trimmed (but not internally trimmed) using custom parameters (including 65% proportion at ends)
+1) explode monolithic fasta to species-specific monolithic fastas
+2) map raw Illumina reads back to consensus UCE contigs
+3) create phased UCE assemblies
+4) explode phased UCE contigs
+5) align phased UCEs
+6) various file cleaning
+7)
+8) filter and trim phased UCE alignments
+
+5) and then filter by taxon completeness (here, to at least 1 sample per spp)
+
+
+
+7) custom QC, trimming, and filtering algo
+8) snp-sites
+9) filter snp-sites for SVDquartets (by sample + species presence)
+9-x) re-filtering based on reviewers - to maximize size of big-eared and small-eared data subsets
+
+13) create unlinked SNP datasets that are as similar as possible (highest locus overlap)
+
+
+0) obtain trimmed consensus UCE alignments (NOT RUN)
+
+# /anaconda/envs/phyluce/bin/phyluce_align_seqcap_align --fasta dataset3_all.fasta --output dataset3_align_edge-trimmed --output-format fasta --taxa 52 --aligner mafft --log-path ./logs/ --incomplete-matrix --proportion 0.65 --cores 4
+
+1) explode monolithic fasta to species-specific monolithic fastas
+
+/anaconda/envs/phyluce/bin/phyluce_align_explode_alignments --alignments dataset3_align_edge-trimmed --output dataset3_align_edge-trimmed_exploded-fastas --by-taxon
+
+2) map raw Illumina reads back to consensus UCE contigs
+
+# (I ran this locally, not on the cluster)
+/anaconda/envs/phyluce/bin/phyluce_snp_bwa_multiple_align.py --config /path/to/config/dataset3_phasing.conf --output /Users/McLean/Google_Drive/FilesPhD/Research/Phylogeny/UCE_data/_Dataset3/snp_remapped/ --subfolder split-adapter-quality-trimmed --mem --cores 4
+
+3) create phased UCE assemblies
+
+# (I ran this locally, not on the cluster)
+# (i.e., run from phyluce-master folder and after adding it as a python path beforehand)
+export PYTHONPATH=/Users/McLean/Desktop/phyluce-master
+python
+import sys
+import pprint
+pprint.pprint(sys.path)
+/path/to/phyluce/phyluce-master/bin/snps/phyluce_snp_phase_uces --config /path/to/config/dataset3_phasing.conf --bams /path/to/bams/snp_remapped/ --output /path/to/outs/snp_phased/ --conservative --cores 4
+
+4) explode phased UCE contigs
+
+/anaconda/envs/phyluce/bin/phyluce_assembly_explode_get_fastas_file --input /path/to/fastas/joined_allele_sequences_all_samples.fasta --output-dir /path/to/outs/fastas-explode/
+
+5) align phased UCEs
+
+# muscle is the preferred aligner here (mafft alignments were sometimes of poorer quality and which results in unphased alignments with strings of ambiguous bases)
+# use muscle manually, move alignments to new folder, rename
+cd /path/to/fastas-explode/
+for f in *fasta; do muscle -in $f -out "$f-align"; done
+mkdir /path/to/aligned-outs/
+mv *fasta-align /path/to/aligned-outs/
+rename -S unaligned.fasta-align fasta *unaligned.fasta-align
+
+6) various file cleaning
+
+# here Im changing N-bases to gaps
+# which is necessary for ips::deleteGaps trimming routine in R
+cd /path/to/aligned-outs/
+perl -pi -w -e 's/N/-/g;' *fasta
+
+7) various taxon name sanitation (in R programming language)
+
+R
+setwd('/path/to/aligned-outs/') ## folder of poorly named taxon alignments
+for (i in list.files()){
+	r <- read.dna(i,format='fasta')
+	for(z in 1:length(rownames(r))){rownames(r)[z] <- paste(strsplit(rownames(r)[z],'_')[[1]][2],strsplit(rownames(r)[z],'_')[[1]][3],substr(strsplit(rownames(r)[z],'_')[[1]][4],1,1),sep='_')} # rename the taxa
+	write.dna(r,format='fasta',nbcol=-100,colsep='',file=paste(getwd(),'/',i,sep=''))
+}
+
+8) filter phased UCEs (which meet the following custom criteria), then edge- and internal-trim, then rename alleles with custom delimiter
+
+# filering criteria:
+# [>=75bp of resolved nucleotide data in *each* allele]
+# [>100bp in total length]
+# [no taxa containing an allele that is >20% divergent from the alignment consensus]
+# [>4 total alleles per alignment]
+
+# other steps:
+# edge- and internal-trim
+# rename the alleles with '_x_' delimiter (eventually required for phyluce_snp_get_from_uce_alignments)
+
+
+# screen phased UCEs and do the above (in R programming language)
+
+R
+require(ape);require(ips);require(seqinr)
+taxa <- read.table('/path/to/taxon-list/sp_list.txt')
+from.dir <- '/path/to/aligned-outs/'
+to.dir <- '/path/to/aligned-and-filtered-outs/'
+dir.create(to.dir)
+setwd(from.dir)
+for (i in list.files(pattern = 'fasta')){
+	r <- read.dna(i, format = 'fasta')
+	
+	# skip UCEs without all species represented (custom criterion)
+	missing.spp <- NA
+	for(h in 1:nrow(taxa)){
+		ifelse(TRUE %in% grepl(taxa[h, ], rownames(r)), NA, missing.spp <- c(missing.spp, 1))
+		}
+	if(FALSE %in% is.na(missing.spp)) {next}
+	
+	# remove taxa in the current alignment for which both alleles have <75bp of non-missing data
+	too.missing <- NA
+	for(j in substr(rownames(r), 1, nchar(rownames(r)) - 2)){
+		allele1 <- grep(j, rownames(r))[1]
+		allele2 <- grep(j, rownames(r))[2]
+		nuc1 <- sum(length(grep('a', r[allele1,])),length(grep('c', r[allele1,])),length(grep('g', r[allele1,])),length(grep('t', r[allele1,])))
+		nuc2 <- sum(length(grep('a', r[allele2,])),length(grep('c', r[allele2,])),length(grep('g', r[allele2,])),length(grep('t', r[allele2,])))
+		if(nuc1 < 75 & nuc2 < 75) {too.missing <- c(too.missing, grep(j, rownames(r)))}
+		}
+	too.missing <- unique(too.missing[-1])
+	if(length(too.missing) == nrow(r)) {next}
+	if(is.numeric(too.missing)){r <- r[-too.missing, ]}		
+	
+	# skip alignments for which the current taxon representation is NOW <4
+	if(nrow(r) < 4) {next}
+	
+	# trim alleles in the current alignment to 65% taxon representation
+	r <- deleteGaps(r, nmax = nrow(r) * .35)
+
+	# skip alignments for which the total length is NOW UCE_bioinformatics_phasing.txt<100bp
+	if(ncol(r) < 100) {next}
+	
+	# find consensus sequence of the current alignment
+	# then remove alleles that are >0.2 (=20%) divergent from this consensus (using pairwise deletion!)
+	r.consense <- as.DNAbin(con(as.character(r), method = 'majority'))
+	too.divergent <- NA
+	for(k in substr(rownames(r), 1, nchar(rownames(r)) - 2)){
+		allele1 <- grep(k, rownames(r))[1]
+		allele2 <- grep(k, rownames(r))[2]
+		ifelse(dist.dna(rbind(r[allele1, ], r.consense), model='p', pairwise.deletion = T) > .2, too.divergent <- c(too.divergent, grep(k, rownames(r))), NA)
+		ifelse(dist.dna(rbind(r[allele2, ], r.consense), model='p', pairwise.deletion = T) > .2, too.divergent <- c(too.divergent, grep(k, rownames(r))), NA)	
+		}
+	too.divergent <- unique(too.divergent[-1])
+	if(is.numeric(too.divergent)){r <- r[-too.divergent, ]}
+
+	# skip alignments for which the current taxon representation is NOW <4
+	if(nrow(r) < 4) {next}
+
+	# trim remaining alleles in the current alignment to 65% taxon representation
+	r <- deleteGaps(r, nmax=nrow(r) * .35)
+
+	# skip alignments for which the total length is NOW <100bp
+	if(ncol(r) < 100) {next}
+	
+	# recode alleles in the current alignment to include "_x_" delimiter
+	for (z in 1:length(rownames(r))){
+		spl <- strsplit(rownames(r)[z], '_')[[1]]
+		rownames(r)[z] <- paste(spl[1], '_', spl[2], '_x_', substr(spl[3], 1, 1), sep='')
+		}
+	
+	# write QC'ed + trimmed alignments
+	r <- r[rownames(r)[order(rownames(r))], ] # reordering for ease-of-viewing
+	write.dna(r, file = paste(to.dir, i, sep=''), append = FALSE, format = 'fasta', nbcol = -100, colsep = '')
+	
+	# clean files from memory
+	rm(r);rm(too.missing);rm(allele1);rm(allele2);rm(too.divergent)
+	}
+
+	
